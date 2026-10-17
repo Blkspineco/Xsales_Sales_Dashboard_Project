@@ -44,8 +44,10 @@ Technologies: Power BI, DAX
 Skills: Data Analysis, data visualization
 
 # Dashboards
+The initial dashboards show the revenue for the years '22 to '24, mainly the idea was to compare the current year(2024) vs last year, also the top 5 in revenue for cities, states and the profit. It shows a minimap that has a conditional format that shows a more intense green for the state with the highest sales, also there's a filter for the period and the location. In the section **Interactive Dashboard** you can go to and interact with the dashboard yourself.
 ![Dashboard_1](Images/Dashboard_1.1.png)
 *Dashboard of General Analysis of company revenue by region and period* 
+
 
 ![Dashboard_2](Images/Dashboard_1.png)
 *Dashboard of Salesperson performance*
@@ -58,6 +60,23 @@ To achieve the desired requirements, I opted to create a dimensional model consi
 ![Diagram](Images/Diagram.png)
 
 # DAX Measures
+To get started on measures I went for the basic ones like making a calendar table with dax
+```sql
+dCalendario = 
+          VAR V_min_date = MIN(fventas[fecha_compra])
+          VAR V_Calendario = FILTER(
+                                  CALENDARAUTO(),
+                                  YEAR([Date])>=YEAR(V_min_date)
+          )
+          RETURN ADDCOLUMNS(
+                            V_Calendario,
+                            "Month",FORMAT([Date],"mmm"),
+                            "Month_name",MONTH([Date]),
+                            "Month_year",FORMAT([Date],"mmm") & " " & FORMAT([Date],"YY"),
+                            "Trimestre","Q" & FORMAT([Date],"Q"),
+                            "Dia_semana",FORMAT([Date],"DDD"),
+                            "Año",YEAR([Date]))
+```
 
 # Key Insights
 
