@@ -60,22 +60,149 @@ To achieve the desired requirements, I opted to create a dimensional model consi
 ![Diagram](Images/Diagram.png)
 
 # DAX Measures
-To get started on measures I went for the basic ones like making a calendar table with dax
+To get started on measures I will show how they answer real business questions and the logic behind it. If you want to see the complete list of measures used please go to ______
+ 
+## Business logic
+Costo: total cost including taxes
+
+Business question: What does it really cost us to sell what we sold? 
+How I came up with this approach: SUMX evaluates row by row, so each sale uses its own product cost and tax rate (via RELATED). Summing the columns first and multiplying afterwards would give a wrong total. Variables keep the two components (product cost and tax) readable and separate.
 ```sql
-dCalendario = 
-          VAR V_min_date = MIN(fventas[fecha_compra])
-          VAR V_Calendario = FILTER(
-                                  CALENDARAUTO(),
-                                  YEAR([Date])>=YEAR(V_min_date)
-          )
-          RETURN ADDCOLUMNS(
-                            V_Calendario,
-                            "Month",FORMAT([Date],"mmm"),
-                            "Month_name",MONTH([Date]),
-                            "Month_year",FORMAT([Date],"mmm") & " " & FORMAT([Date],"YY"),
-                            "Trimestre","Q" & FORMAT([Date],"Q"),
-                            "Dia_semana",FORMAT([Date],"DDD"),
-                            "Año",YEAR([Date]))
+Costo =
+VAR V_costo_producto =
+    SUMX ( fventas, fventas[qtde] * RELATED ( dproducto[costo_producto] ) )
+VAR V_impuesto =
+    SUMX (
+        fventas,
+        fventas[qtde] * RELATED ( dproducto[precio_venta] ) * RELATED ( dproducto[impuesto] )
+    )
+VAR V_resultado = V_costo_producto + V_impuesto
+RETURN
+    V_resultado
+```
+
+## Time intelligence
+dCalendario: the date table behind every time calculation
+
+Why it matters: Time intelligence functions need a continuous date table, so I built it in DAX instead of importing one. It starts at the year of the first sale and adds the columns the report needs: month, quarter, weekday, year and a Month_year label that links to the budget table.
+```sql
+dCalendario =
+VAR V_min_date = MIN ( fventas[fecha_compra] )
+VAR V_Calendario =
+    FILTER ( CALENDARAUTO (), YEAR ( [Date] ) >= YEAR ( V_min_date ) )
+RETURN
+    ADDCOLUMNS (
+        V_Calendario,
+        "Month", FORMAT ( [Date], "mmm" ),
+        "Month_name", MONTH ( [Date] ),
+        "Month_year", FORMAT ( [Date], "mmm" ) & " " & FORMAT ( [Date], "YY" ),
+        "Trimestre", "Q" & FORMAT ( [Date], "Q" ),
+        "Dia_semana", FORMAT ( [Date], "DDD" ),
+        "Año", YEAR ( [Date] )
+    )
+
+```
+Fact_YTD: revenue accumulated up to the selected date
+
+Business question: How much have we billed so far? 
+How I came up with this approach: Instead of DATESYTD, I used ALLSELECTED on the date column. This respects whatever range the user picked in the slicers, so the running total adapts to the selection.
+```sql
+Fact_YTD =
+VAR V_max_date = MAX ( dCalendario[Date] )
+VAR V_result =
+    CALCULATE (
+        [Facturacion],
+        FILTER ( ALLSELECTED ( dCalendario[Date] ), dCalendario[Date] <= V_max_date )
+    )
+RETURN
+    V_result
+
+```
+
+Fact_LY and YOY%: same period last year and growth
+
+Business question: Are we growing or shrinking compared to last year? 
+How I came up with this approach: DATEADD shifts the exact same period back one year, and DIVIDE handles periods with no prior-year data without throwing errors.
+```sql
+Fact_LY =
+CALCULATE ( [Facturacion], DATEADD ( dCalendario[Date], -1, YEAR ) )
+
+YOY% =
+DIVIDE ( [Facturacion] - [Fact_LY], [Fact_LY] )
+
+```
+## Advanced patterns
+Nuevos_clientes: customers who bought for the first time this year
+
+Business question: Are we acquiring new customers or just selling more to the same ones? 
+How I came up with this approach: Set logic. I take the customers in the current year and use EXCEPT to remove everyone who already bought in any earlier year.
+```sql
+Nuevos_clientes =
+VAR V_year_max = MAX ( dCalendario[Año] )
+VAR V_clientes = VALUES ( fventas[id_cliente] )
+VAR V_clientes_anteriores =
+    CALCULATETABLE ( VALUES ( fventas[id_cliente] ), dCalendario[Año] < V_year_max )
+VAR V_resultado = COUNTROWS ( EXCEPT ( V_clientes, V_clientes_anteriores ) )
+RETURN
+    V_resultado
+
+```
+Fact_presupuesto: budget without a physical relationship
+
+Business question: Are we hitting the budget? 
+How I came up with this approach: TREATAS applies the months selected in the calendar to the budget table as a virtual relationship. The data model stays clean, with no extra relationship needed.
+```sql
+Fact_presupuesto =
+CALCULATE (
+    SUM ( Presupuesto[Presupuesto] ),
+    TREATAS ( VALUES ( dCalendario[Month_year] ), Presupuesto[Month_year] )
+)
+
+```
+
+Top5_fact_ciudad: revenue from the top 5 cities
+
+Business question: How concentrated is our revenue? 
+How I came up with this approach: TOPN inside a variable builds the ranked list, then CALCULATE uses it as a filter. The result responds to every slicer on the page.
+```sql
+Top5_fact_ciudad =
+VAR V_top5 = TOPN ( 5, VALUES ( dLocal[ciudad] ), [Facturacion], DESC )
+VAR V_top_facturacion_topn = CALCULATE ( [Facturacion], V_top5 )
+RETURN
+    V_top_facturacion_topn
+
+```
+
+## Storytelling
+Dinamico_estado: a title that writes itself
+
+Business question: What is the viewer looking at right now? 
+How I came up with this approach: The page title updates with the filters (states and years selected), so the dashboard always says what it is showing, like a caption in a book.
+```sql
+Dinamico_estado =
+VAR V_estado =
+    CONCATENATEX ( VALUES ( dLocal[estado_desc] ), dLocal[estado_desc], " , ", dLocal[estado_desc], DESC )
+VAR V_anio =
+    CONCATENATEX ( VALUES ( dCalendario[Año] ), dCalendario[Año], " ,", dCalendario[Año], DESC )
+RETURN
+    "Analysis of " & V_estado & " / " & V_anio
+
+```
+
+## What-if analysis
+Sim_costo: simulating a cost increase
+
+Business question: What happens to our costs if suppliers raise prices by X%? How I came up with this approach: It reads the value from a what-if parameter, so the viewer moves a slider and sees the impact instantly. It turns a report into a decision tool.
+```sql
+Sim_costo =
+VAR V_costo =
+    SUMX (
+        fventas,
+        RELATED ( dproducto[costo_producto] ) * ( 1 + Costo[Valor de Costo] ) * fventas[qtde]
+    )
+RETURN
+    V_costo
+
 ```
 
 # Key Insights
